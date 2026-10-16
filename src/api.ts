@@ -70,15 +70,26 @@ export async function fetchClientToken(): Promise<string> {
   return token;
 }
 
-/** Refresh an expired access token. */
-export async function refreshAccessToken(refreshToken: string): Promise<string> {
-  const data = await request<{ access_token: string }>(ENDPOINTS.refreshToken, {
-    method: "POST",
-    body: JSON.stringify({ refresh_token: refreshToken }),
-    mcApiBearer: preloginBearer(),
-  });
+/**
+ * Refresh an expired access token. Confirmed from a real session: the call sends
+ * the OLD access token as `Authorization` plus the McApi client token, and the
+ * response rotates BOTH tokens ({ access_token, refresh_token, expires_in: 299 }).
+ */
+export async function refreshSession(session: Session): Promise<void> {
+  if (!session.refreshToken) throw new Error("No refresh token. Run `yettel login`.");
+  const data = await request<{ access_token: string; refresh_token?: string }>(
+    ENDPOINTS.refreshToken,
+    {
+      method: "POST",
+      body: JSON.stringify({ refresh_token: session.refreshToken }),
+      mcApiBearer: session.clientToken || preloginBearer(),
+      bcApiToken: session.accessToken,
+    },
+  );
   if (!data?.access_token) throw new Error("refresh: missing access_token in response");
-  return data.access_token;
+  session.accessToken = data.access_token;
+  if (data.refresh_token) session.refreshToken = data.refresh_token;
+  saveSession(session);
 }
 
 /** Run an authenticated call; on 401 refresh the access token once and retry. */
@@ -87,8 +98,7 @@ async function withRefresh<T>(session: Session, fn: () => Promise<T>): Promise<T
     return await fn();
   } catch (err) {
     if (err instanceof ApiError && err.status === 401 && session.refreshToken) {
-      session.accessToken = await refreshAccessToken(session.refreshToken);
-      saveSession(session);
+      await refreshSession(session);
       return fn();
     }
     throw err;
