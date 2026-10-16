@@ -1,9 +1,5 @@
 /**
- * `yettel transactions <accountNumber>` — PHASE 2 PLACEHOLDER.
- *
- * Endpoint and raw item field names come from the public bundle
- * (TransactionsList.api/mapper). Response envelope (paging) is unconfirmed —
- * finish once a HAR is available (see README).
+ * `yettel transactions <accountNumber>` — shapes confirmed from a real session.
  */
 import { getTransactions, ApiError, type TransactionsQuery } from "../api.js";
 import { loadSession, isLoggedIn } from "../storage.js";
@@ -17,6 +13,9 @@ export async function transactionsCommand(
     from?: string;
     to?: string;
     search?: string;
+    pageSize?: string;
+    amountFrom?: string;
+    amountTo?: string;
   },
 ): Promise<void> {
   const session = loadSession();
@@ -37,6 +36,9 @@ export async function transactionsCommand(
     dateFrom: opts.from,
     dateTo: opts.to,
     search: opts.search,
+    pageSize: opts.pageSize ? Number(opts.pageSize) : undefined,
+    amountFrom: opts.amountFrom ? Number(opts.amountFrom) : undefined,
+    amountTo: opts.amountTo ? Number(opts.amountTo) : undefined,
   };
 
   try {
@@ -45,12 +47,14 @@ export async function transactionsCommand(
       console.log(JSON.stringify(data, null, 2));
       return;
     }
-    // TODO(phase 2): map transactions[] → date / counterParty.name / amount /
-    // currency / direction table once a HAR confirms the envelope + paging.
-    console.log(
-      "Transactions fetched. Response shape not yet mapped — showing raw JSON.\n",
-    );
-    console.log(JSON.stringify(data, null, 2));
+    for (const t of data.transactions ?? []) {
+      const date = (t.transactionTime ?? t.valueDate ?? "").slice(0, 10);
+      const sign = t.direction === "d" ? "-" : "+";
+      const amt = `${sign}${t.amount.toFixed(2)} ${t.currency}`;
+      const who = t.counterParty?.name ?? t.transactionCodeDescription ?? "";
+      console.log(`${date}  ${amt.padStart(16)}  ${who}  ${t.description ?? ""}`.trimEnd());
+    }
+    console.log(`\nPage ${data.page + 1} of ${data.totalPages} (${data.totalCount} transactions)`);
   } catch (err) {
     if (err instanceof ApiError) {
       console.error(`Request failed: ${err.message}`);

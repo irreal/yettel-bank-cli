@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { runLogin } from "./login.js";
-import { accountsCommand, balancesCommand } from "./commands/accounts.js";
+import { accountsCommand, balancesCommand, accountDetailCommand } from "./commands/accounts.js";
 import { transactionsCommand } from "./commands/transactions.js";
 import {
   loadSession,
@@ -16,7 +16,7 @@ program
   .name("yettel")
   .description(
     "Owner-authorized personal CLI for Yettel Bank (Serbia) e-banking.\n" +
-      "Phase 1: QR login + session storage. Accounts/transactions are placeholders.",
+      "QR login, accounts, balances and transactions (read-only).",
   )
   .version("0.1.0");
 
@@ -63,26 +63,37 @@ program
 
 program
   .command("accounts")
-  .description("[phase 2 placeholder] List accounts")
+  .description("List accounts")
   .option("--json", "print raw JSON", false)
   .action((opts) => accountsCommand(opts));
 
 program
+  .command("account")
+  .argument("<accountNumber>", "account number")
+  .description("Show details for one account")
+  .option("--json", "print raw JSON", false)
+  .option("--currency <code>", "currency", "RSD")
+  .action((n, opts) => accountDetailCommand(n, opts));
+
+program
   .command("balances")
-  .description("[phase 2 placeholder] Show balances")
+  .description("Show balances")
   .option("--json", "print raw JSON", false)
   .action((opts) => balancesCommand(opts));
 
 program
   .command("transactions")
   .argument("<accountNumber>", "account number to list transactions for")
-  .description("[phase 2 placeholder] List recent transactions")
+  .description("List recent transactions")
   .option("--json", "print raw JSON", false)
   .option("--currency <code>", "currency filter, e.g. RSD")
   .option("--page <n>", "0-based page index", "0")
   .option("--from <iso>", "date-from (ISO)")
   .option("--to <iso>", "date-to (ISO)")
   .option("--search <text>", "counterparty search")
+  .option("--page-size <n>", "items per page", "10")
+  .option("--amount-from <n>", "minimum amount")
+  .option("--amount-to <n>", "maximum amount")
   .action((accountNumber, opts) => transactionsCommand(accountNumber, opts));
 
 program.parseAsync(process.argv);

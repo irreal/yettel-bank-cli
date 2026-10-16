@@ -1,12 +1,25 @@
 /**
- * `yettel accounts` / `yettel balances` — PHASE 2 PLACEHOLDERS.
- *
- * The endpoint and known field names come from the public bundle, but the exact
- * response envelope is unconfirmed. Capture a HAR after login (see README) and
- * finish the mapping where marked TODO.
+ * `yettel accounts` / `yettel balances` / `yettel account <number>`.
+ * Response shapes confirmed from a real logged-in session.
  */
-import { getAccountsOverview, ApiError } from "../api.js";
+import {
+  getAccountsOverview,
+  getAccountDetail,
+  ApiError,
+  type Account,
+  type Balance,
+} from "../api.js";
 import { loadSession, isLoggedIn } from "../storage.js";
+
+function fmt(b: Balance): string {
+  const sign = b.direction === "d" ? "-" : "";
+  return `${sign}${b.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${b.currency}`;
+}
+
+function balanceOf(a: Account): string {
+  if (!a.balances?.length) return "(none)";
+  return a.balances.map((b) => `${fmt(b)} [${b.balanceKind}]`).join(", ");
+}
 
 export async function accountsCommand(opts: { json?: boolean }): Promise<void> {
   const session = loadSession();
@@ -15,33 +28,70 @@ export async function accountsCommand(opts: { json?: boolean }): Promise<void> {
     process.exitCode = 1;
     return;
   }
-
   try {
     const data = await getAccountsOverview(session);
     if (opts.json) {
       console.log(JSON.stringify(data, null, 2));
       return;
     }
-    // TODO(phase 2): map the confirmed envelope into a table of
-    // accountNumber / accountName / availableBalance / currency.
-    console.log(
-      "Accounts fetched. Response shape not yet mapped — showing raw JSON.\n" +
-        "Use --json, or capture a HAR and finish the mapper (see README).\n",
-    );
-    console.log(JSON.stringify(data, null, 2));
+    for (const a of data.accounts ?? []) {
+      console.log(`${a.accountNumber}  ${a.currency}  ${a.accountName ?? a.accountType ?? ""}  ${a.status ?? ""}`);
+      console.log(`    ${balanceOf(a)}`);
+    }
   } catch (err) {
     reportError(err);
   }
 }
 
 export async function balancesCommand(opts: { json?: boolean }): Promise<void> {
-  // Balances live inside the accounts-overview payload (availableBalance /
-  // currentBalance per account), so this reuses the same endpoint for now.
-  console.log(
-    "Balances are part of the accounts-overview payload. Showing raw data; " +
-      "finish the balance mapping once a HAR confirms the shape.\n",
-  );
-  await accountsCommand(opts);
+  const session = loadSession();
+  if (!isLoggedIn(session)) {
+    console.error("Not logged in. Run `yettel login` first.");
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const data = await getAccountsOverview(session);
+    const rows = (data.accounts ?? []).map((a) => ({
+      accountNumber: a.accountNumber,
+      currency: a.currency,
+      balances: a.balances,
+    }));
+    if (opts.json) {
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    for (const a of data.accounts ?? []) {
+      console.log(`${a.accountNumber}  ${balanceOf(a)}`);
+    }
+  } catch (err) {
+    reportError(err);
+  }
+}
+
+export async function accountDetailCommand(
+  accountNumber: string,
+  opts: { json?: boolean; currency?: string },
+): Promise<void> {
+  const session = loadSession();
+  if (!isLoggedIn(session)) {
+    console.error("Not logged in. Run `yettel login` first.");
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const a = await getAccountDetail(session, accountNumber, opts.currency ?? "RSD");
+    if (opts.json) {
+      console.log(JSON.stringify(a, null, 2));
+      return;
+    }
+    console.log(`${a.accountNumber}  ${a.currency}  ${a.productName ?? a.accountName ?? ""}`);
+    console.log(`  IBAN:     ${a.iban ?? "-"}`);
+    console.log(`  Status:   ${a.status ?? "-"}`);
+    console.log(`  Balance:  ${balanceOf(a)}`);
+  } catch (err) {
+    reportError(err);
+  }
 }
 
 function reportError(err: unknown): void {

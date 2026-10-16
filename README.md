@@ -11,7 +11,7 @@ It reproduces the bank's **QR login** flow from the command line: it asks the
 public back-end for a QR challenge, prints the QR so you can scan it with the
 **Yettel mobile banking app**, waits for the app to approve, and stores the
 resulting session tokens in a local file. Listing accounts, balances and
-transactions are **phase-2 placeholders** wired to the right endpoints — see
+transactions are **implemented** wired to the right endpoints — see
 [Phase 2](#phase-2-finishing-accounts--transactions).
 
 > This is tooling for your **own** account. It does **not** bypass MFA, scrape
@@ -118,35 +118,22 @@ curl -s https://online.yettelbank.rs/assets/index-<hash>.js \
   | grep -o 'includes(e)))?"Bearer [^"]*"'
 ```
 
-## Phase 2: finishing accounts & transactions
+## Usage (read-only)
 
-The data endpoints are already wired in `src/api.ts` with the correct paths and
-known field names, but their **exact response envelopes are unconfirmed**. Finish
-them from a real **HAR** capture:
+```bash
+yettel login                 # shows a QR; scan it in the Yettel mobile app
+yettel accounts              # list accounts with balances
+yettel balances              # balances only
+yettel account <number>      # account details (IBAN, status, balance)
+yettel transactions <number> --currency RSD --page 0 --page-size 20
+yettel transactions <number> --amount-from 500 --amount-to 600
+yettel status | logout
+```
 
-### How to export a HAR after logging in
+Add `--json` to any data command for raw output. The access token lives only a
+few minutes; the CLI refreshes it automatically with the stored refresh token and
+asks you to log in again if that fails.
 
-1. In a desktop browser (Chrome/Edge/Firefox), open **DevTools → Network**.
-2. Tick **Preserve log** and make sure recording is on.
-3. Go to `https://online.yettelbank.rs/` and complete the QR login normally.
-4. Click around: open **Accounts / Balances**, open an **account's transactions**,
-   page through a few transactions.
-5. Right-click the Network list → **Save all as HAR with content** (Chrome) /
-   **Save All As HAR** (Firefox). Save it **outside the repo** (HARs contain live
-   tokens — they are git-ignored here as a safety net).
-
-### What to look for in the HAR
-
-| Endpoint | Capture |
-| --- | --- |
-| `GET /private/v1/accounts-overview/{partyId}` | the response body: array vs `{ accounts: [] }`, the balance fields and currency breakdown |
-| `GET /private/v2/transactions-overview/{accountNumber}?...` | the response body: does it wrap `transactions[]` with paging (`totalPages`, `hasNext`)? |
-| The `callbackQrLogin` WebSocket frames | the sequence of `operationStatus` values and the exact token frame |
-
-Then fill in the `TODO(phase 2)` mappers in `src/commands/accounts.ts` and
-`src/commands/transactions.ts` so the commands print clean tables instead of raw
-JSON. The field names to map are listed in
-[`docs/login-api.md` §4](docs/login-api.md).
 
 ## Project layout
 

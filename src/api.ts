@@ -9,7 +9,7 @@ import {
   PREFERRED_CLIENT_CULTURE,
   preloginBearer,
 } from "./config.js";
-import type { Session } from "./storage.js";
+import { saveSession, type Session } from "./storage.js";
 
 export class ApiError extends Error {
   constructor(
@@ -30,6 +30,8 @@ async function request<T>(
   const headers = new Headers(rest.headers);
   headers.set("Content-Type", "application/json");
   headers.set("Accept", "application/json");
+  headers.set("Origin", "https://online.yettelbank.rs");
+  headers.set("Referer", "https://online.yettelbank.rs/");
   headers.set(HEADERS.mcApi, `Bearer ${mcApiBearer}`);
   if (bcApiToken) headers.set(HEADERS.bcApi, `Bearer ${bcApiToken}`);
 
@@ -79,6 +81,20 @@ export async function refreshAccessToken(refreshToken: string): Promise<string> 
   return data.access_token;
 }
 
+/** Run an authenticated call; on 401 refresh the access token once and retry. */
+async function withRefresh<T>(session: Session, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401 && session.refreshToken) {
+      session.accessToken = await refreshAccessToken(session.refreshToken);
+      saveSession(session);
+      return fn();
+    }
+    throw err;
+  }
+}
+
 function mcBearer(session: Session): string {
   return session.clientToken || preloginBearer();
 }
@@ -99,21 +115,76 @@ function requireAuth(session: Session): asserts session is Session & {
  * confirms the JSON, only the response mapping needs finishing.
  */
 
-export interface RawAccount {
-  accountNumber?: string;
+export interface Balance {
+  currency: string;
+  amount: number;
+  direction: string; // "c" credit / "d" debit
+  balanceKind: string;
+}
+
+export interface Account {
+  accountNumber: string;
+  arrangementNumber?: string;
   accountName?: string;
   accountType?: string;
-  availableBalance?: number | string;
-  currentBalance?: number | string;
-  currency?: string;
+  currency: string;
+  status?: string;
+  balances: Balance[];
+  ownerName?: string;
   iban?: string;
   [key: string]: unknown;
 }
 
+export interface AccountsOverview {
+  accounts: Account[];
+  resultCode?: string;
+}
+
+export interface Transaction {
+  transactionId: string;
+  amount: number;
+  amountLocal?: number;
+  currency: string;
+  direction: string; // "d" debit / "c" credit
+  status?: string;
+  valueDate?: string;
+  bookDate?: string;
+  transactionTime?: string;
+  description?: string;
+  transactionCodeDescription?: string;
+  transactionKind?: string;
+  source?: string;
+  counterParty?: { name?: string; accountNumber?: string };
+  [key: string]: unknown;
+}
+
+export interface TransactionsPage {
+  totalCount: number;
+  totalPages: number;
+  page: number;
+  pageSize: number;
+  transactions: Transaction[];
+}
+
 /** GET /private/v1/accounts-overview/{partyId} */
-export async function getAccountsOverview(session: Session): Promise<unknown> {
+async function getAccountsOverviewRaw(session: Session): Promise<AccountsOverview> {
   requireAuth(session);
-  return request<unknown>(ENDPOINTS.accountsOverview(session.partyId), {
+  return request<AccountsOverview>(ENDPOINTS.accountsOverview(session.partyId), {
+    method: "GET",
+    headers: { "Cache-Control": "no-cache" },
+    mcApiBearer: mcBearer(session),
+    bcApiToken: session.accessToken,
+  });
+}
+
+/** GET /private/v2/accounts-overview/account-detail/{account}?currency=... */
+async function getAccountDetailRaw(
+  session: Session,
+  accountNumber: string,
+  currency = "RSD",
+): Promise<Account> {
+  requireAuth(session);
+  return request<Account>(ENDPOINTS.accountDetail(accountNumber, currency), {
     method: "GET",
     headers: { "Cache-Control": "no-cache" },
     mcApiBearer: mcBearer(session),
@@ -123,6 +194,9 @@ export async function getAccountsOverview(session: Session): Promise<unknown> {
 
 export interface TransactionsQuery {
   currency?: string;
+  pageSize?: number;
+  amountFrom?: number;
+  amountTo?: number;
   page?: number; // 0-based, as the web app uses
   dateFrom?: string; // ISO
   dateTo?: string; // ISO
@@ -130,21 +204,23 @@ export interface TransactionsQuery {
 }
 
 /** GET /private/v2/transactions-overview/{accountNumber}?... */
-export async function getTransactions(
+async function getTransactionsRaw(
   session: Session,
   accountNumber: string,
   q: TransactionsQuery = {},
-): Promise<unknown> {
+): Promise<TransactionsPage> {
   requireAuth(session);
   const params = new URLSearchParams();
   if (q.currency) params.set("currencies", q.currency);
   params.set("page", String(q.page ?? 0));
-  params.set("page-size", "10");
+  params.set("page-size", String(q.pageSize ?? 10));
+  if (q.amountFrom !== undefined) params.set("amountFrom", String(q.amountFrom));
+  if (q.amountTo !== undefined) params.set("amountTo", String(q.amountTo));
   if (q.dateFrom) params.set("date-from", q.dateFrom);
   if (q.dateTo) params.set("date-to", q.dateTo);
   if (q.search) params.set("counterPartyIdent", q.search);
   params.set("preferred-client-culture", PREFERRED_CLIENT_CULTURE);
-  return request<unknown>(
+  return request<TransactionsPage>(
     ENDPOINTS.transactionsOverview(accountNumber, params.toString()),
     {
       method: "GET",
@@ -154,3 +230,10 @@ export async function getTransactions(
     },
   );
 }
+
+export const getAccountsOverview = (s: Session) =>
+  withRefresh(s, () => getAccountsOverviewRaw(s));
+export const getAccountDetail = (s: Session, n: string, c = "RSD") =>
+  withRefresh(s, () => getAccountDetailRaw(s, n, c));
+export const getTransactions = (s: Session, n: string, q: TransactionsQuery = {}) =>
+  withRefresh(s, () => getTransactionsRaw(s, n, q));

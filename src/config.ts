@@ -22,6 +22,8 @@ export const ENDPOINTS = {
   cardsOverview: (accountNumber: string) =>
     `${API_ORIGIN}/private/v3/cards-overview?accountNumber=${encodeURIComponent(accountNumber)}`,
   party: (partyId: string) => `${API_ORIGIN}/private/v2/parties/${partyId}`,
+  accountDetail: (accountNumber: string, currency: string) =>
+    `${API_ORIGIN}/private/v2/accounts-overview/account-detail/${encodeURIComponent(accountNumber)}?currency=${encodeURIComponent(currency)}&arrangementNumber=${encodeURIComponent(accountNumber + ";" + currency)}`,
   transactionsOverview: (accountNumber: string, qs: string) =>
     `${API_ORIGIN}/private/v2/transactions-overview/${accountNumber}?${qs}`,
 } as const;
