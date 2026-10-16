@@ -135,6 +135,64 @@ few minutes; the CLI refreshes it automatically with the stored refresh token an
 asks you to log in again if that fails.
 
 
+## MCP server (read-only) — `yettel mcp`
+
+Exposes three **read-only** tools to MCP clients such as ChatGPT: `list_accounts`,
+`get_account_detail`, `get_transactions`. There are no transfer or write tools.
+It reuses the stored session (`YETTEL_CLI_HOME` respected) and refreshes tokens
+automatically; if the session is missing or expired the tools tell you to run
+`yettel login`.
+
+```bash
+yettel mcp                                  # stdio (Claude Desktop, Cursor, ...)
+
+export YETTEL_MCP_API_KEYS=$(openssl rand -hex 32)   # comma-separated for several keys
+yettel mcp --http --port 8787               # http://127.0.0.1:8787/mcp
+```
+
+HTTP mode is stateless streamable HTTP at `/mcp`. It refuses to start without an
+API key (`YETTEL_MCP_API_KEYS`, or the alias `YETTEL_MCP_TOKEN`). Send the key as
+`Authorization: Bearer <key>` or `X-API-Key: <key>`. Keys are compared in
+constant time, repeated failed auth from one IP gets HTTP 429, and `/healthz`
+(no auth) returns only `{"status":"ok"}`. Keys and bank data are never logged.
+`--host` defaults to `127.0.0.1`; `PORT` is honored when `--port` is omitted.
+
+### Connect to ChatGPT
+
+In ChatGPT: Plugins > Add custom MCP server, then choose authentication
+"API key / Bearer" and paste your key. Server URL options:
+
+- a public HTTPS URL ending in `/mcp` (see public hosting below), or
+- the OpenAI Secure MCP Tunnel: run `tunnel-client` on your machine pointing at
+  `http://127.0.0.1:8787/mcp`, so nothing is exposed publicly (safest).
+
+### Public hosting
+
+> **Warning:** a public endpoint holds live access to your bank account. Use a
+> long random key (at least 32 chars is enforced for non-localhost hosts), keep
+> it secret, and prefer the tunnel if you can. Revoke the session in the Yettel
+> app if the host or key may be compromised.
+
+- Binding to a non-localhost address needs `--host 0.0.0.0` and a key of 32+ chars.
+- The server speaks plain HTTP. **TLS must be terminated by a reverse proxy or the
+  host** (Fly.io, Caddy, nginx, ...).
+- The QR login happens locally: run `yettel login` on your own computer, then copy
+  the session file (`yettel status` shows its path) to the host's persistent
+  volume as `$YETTEL_CLI_HOME/session.json` (`/data/session.json` in Docker).
+  Refreshed tokens are written back to that file, so the volume must be writable
+  and persisted. If the refresh token ever expires, log in locally and copy again.
+
+Docker:
+
+```bash
+docker build -t yettel-mcp .
+docker run -p 8787:8787 -v yettel-data:/data -e YETTEL_MCP_API_KEYS=<key> yettel-mcp
+```
+
+On Fly.io: create an app and a volume mounted at `/data`, set the key with
+`fly secrets set YETTEL_MCP_API_KEYS=...`, set the internal port to 8787, and
+upload `session.json` into the volume (e.g. `fly ssh sftp shell`).
+
 ## Project layout
 
 ```
