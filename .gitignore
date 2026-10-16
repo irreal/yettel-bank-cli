@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+
+# Never commit secrets / captured sessions / HARs
+.env
+.env.*
+*.har
+session.json
+yettel-cli/
+
+# Local reverse-engineering scratch (downloaded public bundles, large)
+research/
