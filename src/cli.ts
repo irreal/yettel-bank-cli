@@ -96,4 +96,24 @@ program
   .option("--amount-to <n>", "maximum amount")
   .action((accountNumber, opts) => transactionsCommand(accountNumber, opts));
 
+program
+  .command("mcp")
+  .description("Run the read-only MCP server (stdio by default, or --http)")
+  .option("--http", "serve streamable HTTP at /mcp instead of stdio", false)
+  .option("--host <host>", "HTTP bind address (default 127.0.0.1; use 0.0.0.0 to host publicly)", "127.0.0.1")
+  .option("--port <n>", "HTTP port (default: $PORT or 8787)")
+  .action(async (opts) => {
+    try {
+      const m = await import("./mcp.js");
+      if (opts.http) {
+        await m.runHttp({ host: opts.host, port: Number(opts.port ?? process.env.PORT ?? 8787) });
+      } else {
+        await m.runStdio();
+      }
+    } catch (err) {
+      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
 program.parseAsync(process.argv);
