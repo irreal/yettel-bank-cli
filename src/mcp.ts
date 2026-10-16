@@ -10,9 +10,11 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { getAccountsOverview, getAccountDetail, getTransactions } from "./api.js";
 import { loadSession, isLoggedIn } from "./storage.js";
+import { SessionExpiredError } from "./api.js";
+import { startKeepAliveTimer } from "./keepalive.js";
 
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
-const LOGIN_MSG = "Not logged in or session expired. Run `yettel login` on the machine hosting this server.";
+const LOGIN_MSG = "Session expired or not logged in. Run `yettel login` on the machine hosting this server, then retry.";
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (v: unknown): ToolResult => ({ content: [{ type: "text", text: JSON.stringify(v) }] });
@@ -24,6 +26,7 @@ async function guarded(fn: () => Promise<unknown>): Promise<ToolResult> {
   try {
     return ok(await fn());
   } catch (err) {
+    if (err instanceof SessionExpiredError) return fail(LOGIN_MSG);
     const status = (err as { status?: number }).status;
     if (status === 401 || status === 403 || /refresh|login|unauthor/i.test(String((err as Error).message))) {
       return fail(LOGIN_MSG);
@@ -98,6 +101,7 @@ export function buildServer(): McpServer {
 }
 
 export async function runStdio(): Promise<void> {
+  startKeepAliveTimer(); // logs go to stderr (stdout is the MCP channel)
   await buildServer().connect(new StdioServerTransport());
 }
 
@@ -183,6 +187,7 @@ export async function runHttp(opts: { host: string; port: number }): Promise<voi
     }
   });
 
+  startKeepAliveTimer();
   await new Promise<void>((resolve, reject) => {
     http.once("error", reject);
     http.listen(opts.port, opts.host, () => resolve());

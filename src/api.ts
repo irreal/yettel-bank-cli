@@ -9,7 +9,7 @@ import {
   PREFERRED_CLIENT_CULTURE,
   preloginBearer,
 } from "./config.js";
-import { saveSession, type Session } from "./storage.js";
+import { loadSession, saveSession, withSessionLock, type Session } from "./storage.js";
 
 export class ApiError extends Error {
   constructor(
@@ -70,26 +70,64 @@ export async function fetchClientToken(): Promise<string> {
   return token;
 }
 
+export const SESSION_EXPIRED_MSG = "Session expired. Run `yettel login` to sign in again.";
+
+export class SessionExpiredError extends Error {
+  constructor(message = SESSION_EXPIRED_MSG) {
+    super(message);
+    this.name = "SessionExpiredError";
+  }
+}
+
+/** Skip a refresh if another process rotated the tokens this recently. */
+const FRESH_MS = 20_000;
+
 /**
- * Refresh an expired access token. Confirmed from a real session: the call sends
- * the OLD access token as `Authorization` plus the McApi client token, and the
+ * Refresh the access token. Confirmed from a real session: the call sends the
+ * OLD access token as `Authorization` plus the McApi client token, and the
  * response rotates BOTH tokens ({ access_token, refresh_token, expires_in: 299 }).
+ *
+ * Takes a cross-process lock, re-reads the session file (another process may
+ * have rotated the refresh token), refreshes, then writes atomically. The
+ * passed-in `session` object is updated in place. Throws SessionExpiredError
+ * when the bank rejects the refresh token.
  */
-export async function refreshSession(session: Session): Promise<void> {
-  if (!session.refreshToken) throw new Error("No refresh token. Run `yettel login`.");
-  const data = await request<{ access_token: string; refresh_token?: string }>(
-    ENDPOINTS.refreshToken,
-    {
-      method: "POST",
-      body: JSON.stringify({ refresh_token: session.refreshToken }),
-      mcApiBearer: session.clientToken || preloginBearer(),
-      bcApiToken: session.accessToken,
-    },
-  );
-  if (!data?.access_token) throw new Error("refresh: missing access_token in response");
-  session.accessToken = data.access_token;
-  if (data.refresh_token) session.refreshToken = data.refresh_token;
-  saveSession(session);
+export async function refreshSession(session: Session, opts: { force?: boolean } = {}): Promise<void> {
+  await withSessionLock(async () => {
+    const disk = loadSession();
+    // Another process refreshed while we waited: adopt its tokens.
+    if (
+      !opts.force &&
+      disk.refreshToken &&
+      disk.refreshToken !== session.refreshToken &&
+      disk.lastRefreshAt &&
+      Date.now() - disk.lastRefreshAt < FRESH_MS
+    ) {
+      Object.assign(session, disk);
+      return;
+    }
+    const cur = disk.refreshToken ? disk : session;
+    if (!cur.refreshToken) throw new SessionExpiredError();
+    let data: { access_token: string; refresh_token?: string };
+    try {
+      data = await request(ENDPOINTS.refreshToken, {
+        method: "POST",
+        body: JSON.stringify({ refresh_token: cur.refreshToken }),
+        mcApiBearer: cur.clientToken || preloginBearer(),
+        bcApiToken: cur.accessToken,
+      });
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 400 || err.status === 401 || err.status === 403)) {
+        throw new SessionExpiredError();
+      }
+      throw err;
+    }
+    if (!data?.access_token) throw new Error("refresh: missing access_token in response");
+    const next: Session = { ...cur, accessToken: data.access_token, lastRefreshAt: Date.now() };
+    if (data.refresh_token) next.refreshToken = data.refresh_token;
+    saveSession(next);
+    Object.assign(session, next);
+  });
 }
 
 /** Run an authenticated call; on 401 refresh the access token once and retry. */
@@ -113,7 +151,7 @@ function requireAuth(session: Session): asserts session is Session & {
   accessToken: string;
   partyId: string;
 } {
-  if (!session.accessToken) throw new Error("Not logged in. Run `yettel login` first.");
+  if (!session.accessToken) throw new SessionExpiredError("Not logged in. Run `yettel login` first.");
   if (!session.partyId) throw new Error("Session missing partyId. Re-run `yettel login`.");
 }
 

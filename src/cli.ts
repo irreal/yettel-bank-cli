@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { runLogin } from "./login.js";
+import { refreshOnce, DEFAULT_INTERVAL_S, MAX_INTERVAL_S } from "./keepalive.js";
 import { accountsCommand, balancesCommand, accountDetailCommand } from "./commands/accounts.js";
 import { transactionsCommand } from "./commands/transactions.js";
 import {
@@ -39,18 +40,66 @@ program
 
 program
   .command("status")
-  .description("Show whether a session is stored and for whom")
-  .action(() => {
+  .description("Show session age, last refresh and validity (no tokens printed)")
+  .option("--check", "attempt a refresh to verify the session is currently valid", false)
+  .action(async (opts) => {
     const s = loadSession();
     if (!isLoggedIn(s)) {
       console.log("Not logged in. Run `yettel login`.");
+      process.exitCode = 1;
       return;
     }
-    console.log(`Logged in. Session file: ${sessionPath()}`);
-    console.log(`  partyId:    ${s.partyId ?? "(unknown)"}`);
-    console.log(`  customerId: ${s.customerId ?? "(unknown)"}`);
-    if (s.loginTime) console.log(`  loginTime:  ${new Date(s.loginTime).toISOString()}`);
-    console.log(`  clientToken: ${s.clientToken ? "present" : "missing"}`);
+    const ago = (t?: number) => {
+      if (!t) return "unknown";
+      const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+      const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+      return `${d ? d + "d " : ""}${h ? h + "h " : ""}${m}m ago (${new Date(t).toISOString()})`;
+    };
+    console.log(`Session file:  ${sessionPath()}`);
+    console.log(`Login:         ${ago(s.loginTime)}`);
+    console.log(`Last refresh:  ${ago(s.lastRefreshAt)}`);
+    console.log(`Refresh token: ${s.refreshToken ? "present" : "missing"}`);
+    if (!opts.check) {
+      console.log("Valid:         not checked (use --check to attempt a refresh)");
+      return;
+    }
+    const r = await refreshOnce();
+    console.log(`Valid:         ${r.outcome === "ok" ? "yes" : r.outcome === "expired" ? "no - run `yettel login`" : "unknown - " + r.message}`);
+    if (r.outcome !== "ok") process.exitCode = 1;
+  });
+
+program
+  .command("keepalive")
+  .description("Refresh the stored session (keeps you logged in). --loop <seconds> to run as a daemon")
+  .option("--loop [seconds]", `repeat every N seconds (default ${DEFAULT_INTERVAL_S} when no value; max ${MAX_INTERVAL_S})`)
+  .action(async (opts) => {
+    const stamp = () => new Date().toISOString();
+    const once = async () => {
+      const r = await refreshOnce();
+      console.log(`${stamp()} ${r.outcome === "ok" ? "ok" : r.message}`);
+      return r.outcome;
+    };
+    if (opts.loop === undefined) {
+      const o = await once();
+      if (o !== "ok") process.exitCode = 1;
+      return;
+    }
+    const n = opts.loop === true ? DEFAULT_INTERVAL_S : Number(opts.loop);
+    if (!Number.isFinite(n) || n < 5) {
+      console.error("--loop must be a number of seconds >= 5");
+      process.exitCode = 1;
+      return;
+    }
+    const interval = Math.min(n, MAX_INTERVAL_S);
+    if (interval !== n) console.log(`${stamp()} interval capped to ${interval}s (access token lives 299s)`);
+    for (;;) {
+      const o = await once();
+      if (o === "expired") {
+        process.exitCode = 1;
+        return;
+      }
+      await new Promise((r) => setTimeout(r, interval * 1000));
+    }
   });
 
 program

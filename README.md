@@ -193,6 +193,43 @@ On Fly.io: create an app and a volume mounted at `/data`, set the key with
 `fly secrets set YETTEL_MCP_API_KEYS=...`, set the internal port to 8787, and
 upload `session.json` into the volume (e.g. `fly ssh sftp shell`).
 
+## Staying logged in (keep-alive)
+
+Access tokens last ~299 seconds; each refresh rotates both tokens and the CLI saves the new ones. As long as something refreshes the session regularly you never need to scan a QR again.
+
+- `yettel keepalive` refreshes once and prints only `ok` or `Session expired. Run \`yettel login\``. Exit code is non-zero on expiry.
+- `yettel keepalive --loop 240` runs as a daemon (interval is capped at 280s).
+- `yettel mcp` (stdio and HTTP) refreshes in the background every 240s while it runs.
+- `yettel status` shows login age, last refresh time and whether a refresh token is present; `yettel status --check` attempts a refresh to confirm the session is valid. No tokens are printed.
+- Several processes can share one session file: refreshes take a lock file (`session.lock`), re-read the session first, and write atomically (temp file + rename), so rotated refresh tokens are never clobbered.
+- When the session is dead, every command and MCP tool error says to run `yettel login`.
+
+**Unknown:** the bank's idle timeout and absolute session lifetime for refresh tokens are not known. Watch `yettel status` over days to learn them.
+
+cron (every 4 minutes):
+
+```cron
+*/4 * * * * YETTEL_CLI_HOME=$HOME/.config/yettel-cli /usr/bin/node /path/to/dist/cli.js keepalive >> /tmp/yettel-keepalive.log 2>&1
+```
+
+systemd (`~/.config/systemd/user/yettel-keepalive.service`):
+
+```ini
+[Service]
+ExecStart=/usr/bin/node /path/to/dist/cli.js keepalive --loop 240
+Restart=on-failure
+RestartPreventExitStatus=1
+
+[Install]
+WantedBy=default.target
+```
+
+Docker (mount the session dir; the container only refreshes):
+
+```sh
+docker run -d --restart unless-stopped -v $HOME/.config/yettel-cli:/data -e YETTEL_CLI_HOME=/data yettel-cli keepalive --loop 240
+```
+
 ## Project layout
 
 ```
